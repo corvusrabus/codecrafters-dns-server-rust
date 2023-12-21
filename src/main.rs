@@ -43,7 +43,7 @@ fn main() {
             Ok((size, source)) => {
                 println!("Received {} bytes from {}", size, source);
                 // debug_assert_eq!(size,DNS_HEADER_SIZE);
-                let mut header = DNSMessage { packet_id: 1234u16, ..Default::default() };
+                let mut header = DNSMessage { packet_id: u16::from_ne_bytes(1234u16.to_be_bytes()), ..Default::default() };
                 header.set_qr(true);
                 let bytes = to_bytes(&header);
                 println!("{bytes:?}");
