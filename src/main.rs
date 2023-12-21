@@ -45,9 +45,10 @@ fn main() {
                 // debug_assert_eq!(size,DNS_HEADER_SIZE);
                 let mut header = DNSMessage { packet_id: 1234u16, ..Default::default() };
                 header.set_qr(true);
-
+                let bytes = to_bytes(&header);
+                println!("{bytes:?}");
                 udp_socket
-                    .send_to(to_bytes(&header), source)
+                    .send_to(bytes, source)
                     .expect("Failed to send response");
             }
             Err(e) => {
