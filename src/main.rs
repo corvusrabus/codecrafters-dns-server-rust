@@ -74,6 +74,7 @@ impl DNSMessageQuestion {
             }
 
             let string_part = from_utf8(&slice[1..1 + size as usize]).map_err(|_| ())?;
+            string.push_str(string_part);
             bytes_read += 1 + size;
             slice = &slice[1 + size as usize..];
             size = u8::from_be_bytes([slice[0]]);
@@ -235,7 +236,6 @@ fn main() {
                 // resp.set_answer_name("codecrafters.io");
                 // resp.add_answer_data("8888".as_bytes());
                 let bytes = resp.build();
-                println!("{bytes:?}");
                 udp_socket
                     .send_to(bytes.as_slice(), source)
                     .expect("Failed to send response");
