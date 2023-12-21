@@ -1,5 +1,27 @@
+use std::mem::{size_of, transmute};
 // Uncomment this block to pass the first stage
 use std::net::UdpSocket;
+
+#[derive(Default)]
+pub struct DNSMessage {
+    pub packet_id: u16,
+    qr_oc_aa_tc_rd: u8,
+    ra_z_rcode: u8,
+    pub qd_count: u16,
+    pub an_count: u16,
+    pub ns_count: u16,
+    pub ar_count: u16,
+}
+
+impl DNSMessage {
+    fn set_qr(&mut self, bit: bool) -> &mut Self {
+        let bit = (bit as u8) << 7;
+        self.qr_oc_aa_tc_rd |= bit;
+        self
+    }
+}
+
+const DNS_HEADER_SIZE: usize = size_of::<DNSMessage>();
 
 fn main() {
     // You can use print statements as follows for debugging, they'll be visible when running tests.
@@ -13,6 +35,11 @@ fn main() {
             Ok((size, source)) => {
                 println!("Received {} bytes from {}", size, source);
                 let response = [];
+                // debug_assert_eq!(size,DNS_HEADER_SIZE);
+                let mut header = DNSMessage::default();
+                header.packet_id = 1234;
+                header.set_qr(true);
+
                 udp_socket
                     .send_to(&response, source)
                     .expect("Failed to send response");
