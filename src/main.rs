@@ -12,21 +12,29 @@ pub struct DNSMessageHeader {
     pub ar_count: u16,
 }
 
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct DNSMessageQuestion {
     names: Vec<String>,
     r#type: u16,
     class: u16,
 }
 
+#[derive(Default)]
+pub struct DNSMessageAnswer {
+    question: DNSMessageQuestion,
+    ttl: u64,
+    length: u16,
+    data: Vec<u8>,
+}
+
 pub struct DNSMessageBuilder {
     header: DNSMessageHeader,
     question: DNSMessageQuestion,
+    answer: DNSMessageAnswer,
 }
 
 impl DNSMessageBuilder {
-    fn build(&self) -> Vec<u8> {
-        let mut res = Vec::new();
+    fn extend_header(&self, res: &mut Vec<u8>) {
         res.extend(self.header.packet_id.to_be_bytes());
         res.push(self.header.qr_oc_aa_tc_rd);
         res.push(self.header.ra_z_rcode);
@@ -34,31 +42,59 @@ impl DNSMessageBuilder {
         res.extend(self.header.an_count.to_be_bytes());
         res.extend(self.header.ns_count.to_be_bytes());
         res.extend(self.header.ar_count.to_be_bytes());
-        for name in self.question.names.iter() {
+    }
+    fn extend_question(&self, res: &mut Vec<u8>) {
+        Self::extend_question_type(&self.question, res);
+    }
+    fn extend_question_type(question: &DNSMessageQuestion, res: &mut Vec<u8>) {
+        for name in question.names.iter() {
             for label in name.split('.') {
                 res.extend((label.len() as u8).to_be_bytes());
                 res.extend(label.as_bytes())
             }
             res.push(0u8);
         }
-        res.extend(self.question.r#type.to_be_bytes());
-        res.extend(self.question.class.to_be_bytes());
+        res.extend(question.r#type.to_be_bytes());
+        res.extend(question.class.to_be_bytes());
+    }
+    fn extend_answer(&self, res: &mut Vec<u8>) {
+        Self::extend_question_type(&self.answer.question, res);
+        res.extend(self.answer.ttl.to_be_bytes());
+        res.extend(self.answer.length.to_be_bytes());
+        res.extend(self.answer.data.as_slice());
+    }
+    fn build(&self) -> Vec<u8> {
+        let mut res = Vec::new();
+        self.extend_header(&mut res);
+        self.extend_question(&mut res);
+        self.extend_answer(&mut res);
         res
     }
     pub fn new() -> Self {
+        let question = DNSMessageQuestion {
+            names: vec![],
+            r#type: 1,
+            class: 1,
+        };
         Self {
             header: DNSMessageHeader { packet_id: 1234u16, ..Default::default() },
-            question: DNSMessageQuestion {
-                names: vec![],
-                r#type: 1,
-                class: 1,
-            },
+            question: question.clone(),
+            answer: DNSMessageAnswer { question,ttl: 60u64, ..Default::default() },
         }
     }
-    pub fn add_name(&mut self, name: &str) {
+    pub fn add_question_name(&mut self, name: &str) {
         self.question.names.push(name.to_string());
         self.header.qd_count += 1;
     }
+    pub fn add_answer_name(&mut self, name: &str) {
+        self.answer.question.names.push(name.to_string());
+        self.header.an_count += 1;
+    }
+    pub fn add_answer_data(&mut self, data : &[u8]) {
+        self.answer.length += data.len() as u16;
+        self.answer.data.extend(data);
+    }
+
 }
 
 impl DNSMessageBuilder {
@@ -86,7 +122,9 @@ fn main() {
                 // debug_assert_eq!(size,DNS_HEADER_SIZE);
                 let mut resp = DNSMessageBuilder::new();
                 resp.set_qr(true);
-                resp.add_name("codecrafters.io");
+                resp.add_question_name("codecrafters.io");
+                resp.add_answer_name("codecrafters.io");
+                resp.add_answer_data("8888".as_bytes());
                 let bytes = resp.build();
                 println!("{bytes:?}");
                 udp_socket
