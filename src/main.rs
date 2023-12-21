@@ -50,6 +50,7 @@ fn main() {
                 udp_socket
                     .send_to(bytes, source)
                     .expect("Failed to send response");
+                println!("sent");
             }
             Err(e) => {
                 eprintln!("Error receiving data: {}", e);
