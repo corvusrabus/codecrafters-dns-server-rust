@@ -1,3 +1,4 @@
+use std::mem::size_of;
 // Uncomment this block to pass the first stage
 use std::net::UdpSocket;
 
@@ -10,6 +11,41 @@ pub struct DNSMessageHeader {
     pub an_count: u16,
     pub ns_count: u16,
     pub ar_count: u16,
+}
+
+impl From<[u8; size_of::<DNSMessageHeader>()]> for DNSMessageHeader {
+    fn from(value: [u8; size_of::<DNSMessageHeader>()]) -> Self {
+        Self {
+            packet_id: u16::from_be_bytes(value[0..2].try_into().unwrap()),
+            qr_oc_aa_tc_rd: value[2],
+            ra_z_rcode: value[3],
+            qd_count: u16::from_be_bytes(value[4..6].try_into().unwrap()),
+            an_count: u16::from_be_bytes(value[6..8].try_into().unwrap()),
+            ns_count: u16::from_be_bytes(value[8..10].try_into().unwrap()),
+            ar_count: u16::from_be_bytes(value[10..12].try_into().unwrap()),
+        }
+    }
+}
+
+impl DNSMessageHeader {
+    fn get_opcode(&self) -> u8 {
+        (self.qr_oc_aa_tc_rd & 0b0111_1000) >> 3
+    }
+    fn set_opcode(&mut self, op_code: u8) {
+        self.qr_oc_aa_tc_rd &= 0b1000_0111;
+        self.qr_oc_aa_tc_rd |= (op_code << 3) & 0b0111_1000;
+    }
+    fn get_rd(&self) -> u8 {
+        (self.qr_oc_aa_tc_rd & 0b0000_0001)
+    }
+    fn set_rd(&mut self,rd : u8)  {
+        self.qr_oc_aa_tc_rd &= 0b1111_1110;
+        self.qr_oc_aa_tc_rd |= rd &0b0000_0001;
+    }
+    fn set_rcode(&mut self, rcode: u8) {
+        self.ra_z_rcode &= 0b1111_0000;
+        self.ra_z_rcode |= rcode & 0b0000_1111;
+    }
 }
 
 #[derive(Default, Clone)]
@@ -28,9 +64,9 @@ pub struct DNSMessageAnswer {
 }
 
 pub struct DNSMessageBuilder {
-    header: DNSMessageHeader,
-    question: DNSMessageQuestion,
-    answer: DNSMessageAnswer,
+    pub header: DNSMessageHeader,
+    pub question: DNSMessageQuestion,
+    pub answer: DNSMessageAnswer,
 }
 
 impl DNSMessageBuilder {
@@ -79,7 +115,7 @@ impl DNSMessageBuilder {
         Self {
             header: DNSMessageHeader { packet_id: 1234u16, ..Default::default() },
             question: question.clone(),
-            answer: DNSMessageAnswer { question,ttl: 60u64, ..Default::default() },
+            answer: DNSMessageAnswer { question, ttl: 60u64, ..Default::default() },
         }
     }
     pub fn add_question_name(&mut self, name: &str) {
@@ -90,23 +126,23 @@ impl DNSMessageBuilder {
         self.answer.question.names.push(name.to_string());
         self.header.an_count += 1;
     }
-    pub fn add_answer_data(&mut self, data : &[u8]) {
+    pub fn add_answer_data(&mut self, data: &[u8]) {
         self.answer.length += data.len() as u16;
         self.answer.data.extend(data);
     }
-
 }
 
 impl DNSMessageBuilder {
-    fn set_qr(&mut self, bit: bool) -> &mut Self {
+    fn set_header_qr(&mut self, bit: bool) -> &mut Self {
         let bit = (bit as u8) << 7;
         self.header.qr_oc_aa_tc_rd |= bit;
         self
     }
+    fn set_header_qr_oc_aa_tc_rd(&mut self, qr_oc_aa_tc_rd: u8) {
+        self.header.qr_oc_aa_tc_rd = qr_oc_aa_tc_rd;
+    }
 }
 
-
-// const DNS_HEADER_SIZE: usize = size_of::<DNSMessage>();
 
 fn main() {
     // You can use print statements as follows for debugging, they'll be visible when running tests.
@@ -120,8 +156,20 @@ fn main() {
             Ok((size, source)) => {
                 println!("Received {} bytes from {}", size, source);
                 // debug_assert_eq!(size,DNS_HEADER_SIZE);
+                let msg_header = DNSMessageHeader::from(TryInto::<[u8;12]>::try_into(&buf[0..12]).unwrap());
                 let mut resp = DNSMessageBuilder::new();
-                resp.set_qr(true);
+                let opcode = msg_header.get_opcode();
+                resp.header.set_opcode(opcode);
+                resp.header.packet_id = msg_header.packet_id;
+                resp.set_header_qr(true);
+                let rcode = if opcode == 0 {
+                    0
+                }
+                else {
+                    4
+                };
+                resp.header.set_rcode(rcode);
+                resp.header.set_rd(msg_header.get_rd());
                 resp.add_question_name("codecrafters.io");
                 resp.add_answer_name("codecrafters.io");
                 resp.add_answer_data("8888".as_bytes());
