@@ -1,6 +1,7 @@
 use std::mem::size_of;
 // Uncomment this block to pass the first stage
 use std::net::UdpSocket;
+use std::str::from_utf8;
 
 #[derive(Default)]
 pub struct DNSMessageHeader {
@@ -36,11 +37,11 @@ impl DNSMessageHeader {
         self.qr_oc_aa_tc_rd |= (op_code << 3) & 0b0111_1000;
     }
     fn get_rd(&self) -> u8 {
-        (self.qr_oc_aa_tc_rd & 0b0000_0001)
+        self.qr_oc_aa_tc_rd & 0b0000_0001
     }
-    fn set_rd(&mut self,rd : u8)  {
+    fn set_rd(&mut self, rd: u8) {
         self.qr_oc_aa_tc_rd &= 0b1111_1110;
-        self.qr_oc_aa_tc_rd |= rd &0b0000_0001;
+        self.qr_oc_aa_tc_rd |= rd & 0b0000_0001;
     }
     fn set_rcode(&mut self, rcode: u8) {
         self.ra_z_rcode &= 0b1111_0000;
@@ -50,9 +51,39 @@ impl DNSMessageHeader {
 
 #[derive(Default, Clone)]
 pub struct DNSMessageQuestion {
-    names: Vec<String>,
+    name: String,
     r#type: u16,
     class: u16,
+}
+
+impl DNSMessageQuestion {
+    fn parse_from_slice(slice: &[u8]) -> Result<Self, ()> {
+        let mut slice = slice;
+        if slice.len() < 5 {
+            return Err(());
+        }
+        let mut string = String::new();
+        let mut size = u8::from_be_bytes([slice[0]]);
+        while size != 0 {
+            if slice.len() <= size as usize + 1 {
+                return Err(());
+            }
+            if !string.is_empty() {
+                string.push('.');
+            }
+            string.push_str(from_utf8(&slice[1..1 + size as usize]).map_err(|_| ())?);
+            slice = &slice[1 + size as usize..];
+            size = u8::from_be_bytes([slice[0]]);
+        }
+        if slice.len() < 5 {
+            return Err(());
+        }
+        Ok(Self {
+            name: string,
+            r#type: u16::from_be_bytes(slice[1..3].try_into().unwrap()),
+            class: u16::from_be_bytes(slice[3..5].try_into().unwrap()),
+        })
+    }
 }
 
 #[derive(Default)]
@@ -83,13 +114,12 @@ impl DNSMessageBuilder {
         Self::extend_question_type(&self.question, res);
     }
     fn extend_question_type(question: &DNSMessageQuestion, res: &mut Vec<u8>) {
-        for name in question.names.iter() {
-            for label in name.split('.') {
-                res.extend((label.len() as u8).to_be_bytes());
-                res.extend(label.as_bytes())
-            }
-            res.push(0u8);
+        let name = &question.name;
+        for label in name.split('.') {
+            res.extend((label.len() as u8).to_be_bytes());
+            res.extend(label.as_bytes())
         }
+        res.push(0u8);
         res.extend(question.r#type.to_be_bytes());
         res.extend(question.class.to_be_bytes());
     }
@@ -108,7 +138,7 @@ impl DNSMessageBuilder {
     }
     pub fn new() -> Self {
         let question = DNSMessageQuestion {
-            names: vec![],
+            name: String::new(),
             r#type: 1,
             class: 1,
         };
@@ -118,13 +148,13 @@ impl DNSMessageBuilder {
             answer: DNSMessageAnswer { question, ttl: 60u64, ..Default::default() },
         }
     }
-    pub fn add_question_name(&mut self, name: &str) {
-        self.question.names.push(name.to_string());
-        self.header.qd_count += 1;
+    pub fn set_question_name(&mut self, name: &str) {
+        self.question.name = name.to_string();
+        self.header.qd_count = 1;
     }
-    pub fn add_answer_name(&mut self, name: &str) {
-        self.answer.question.names.push(name.to_string());
-        self.header.an_count += 1;
+    pub fn set_answer_name(&mut self, name: &str) {
+        self.answer.question.name = name.to_string();
+        self.header.an_count = 1;
     }
     pub fn add_answer_data(&mut self, data: &[u8]) {
         self.answer.length += data.len() as u16;
@@ -137,9 +167,6 @@ impl DNSMessageBuilder {
         let bit = (bit as u8) << 7;
         self.header.qr_oc_aa_tc_rd |= bit;
         self
-    }
-    fn set_header_qr_oc_aa_tc_rd(&mut self, qr_oc_aa_tc_rd: u8) {
-        self.header.qr_oc_aa_tc_rd = qr_oc_aa_tc_rd;
     }
 }
 
@@ -156,7 +183,8 @@ fn main() {
             Ok((size, source)) => {
                 println!("Received {} bytes from {}", size, source);
                 // debug_assert_eq!(size,DNS_HEADER_SIZE);
-                let msg_header = DNSMessageHeader::from(TryInto::<[u8;12]>::try_into(&buf[0..12]).unwrap());
+                let msg_header = DNSMessageHeader::from(TryInto::<[u8; 12]>::try_into(&buf[0..12]).unwrap());
+                let msg_question = DNSMessageQuestion::parse_from_slice(&buf[12..]).unwrap();
                 let mut resp = DNSMessageBuilder::new();
                 let opcode = msg_header.get_opcode();
                 resp.header.set_opcode(opcode);
@@ -164,14 +192,17 @@ fn main() {
                 resp.set_header_qr(true);
                 let rcode = if opcode == 0 {
                     0
-                }
-                else {
+                } else {
                     4
                 };
                 resp.header.set_rcode(rcode);
                 resp.header.set_rd(msg_header.get_rd());
-                resp.add_question_name("codecrafters.io");
-                resp.add_answer_name("codecrafters.io");
+                resp.question = msg_question.clone();
+                resp.answer.question = msg_question;
+                resp.header.an_count = 1;
+                resp.header.qd_count = 1;
+                // resp.set_question_name("codecrafters.io");
+                // resp.set_answer_name("codecrafters.io");
                 resp.add_answer_data("8888".as_bytes());
                 let bytes = resp.build();
                 println!("{bytes:?}");
