@@ -58,57 +58,47 @@ pub struct DNSMessageQuestion {
 
 impl DNSMessageQuestion {
     fn parse_from_slice(slice: &[u8], real_start: usize) -> Result<(Self, usize), ()> {
-        println!("Parsing question from {real_start}");
         let mut start = real_start;
         let mut string = String::new();
-        let is_pointer = (slice[start] & 0b1100_0000) == 0b1100_0000;
-        println!("Slice start binary {:08b}",slice[start]);
-        if is_pointer {
-            let mut n: [u8; 2] = slice[start..start + 2].try_into().unwrap();
-
-            n[0] &= 0b0011_1111;
-            let pointer = u16::from_be_bytes(n);
-            println!("pointer is {pointer}");
-            start = pointer as usize;
-        }
-        let mut size = u8::from_be_bytes([slice[start]]);
-
-        while size != 0 {
-            println!("Starting from size {size} and ispointer {is_pointer}");
-
-            if !string.is_empty() {
-                string.push('.');
-            }
-
-            let string_part = from_utf8(&slice[start + 1..start + 1 + size as usize]).map_err(|_| ())?;
-            println!("string part {string_part}");
-            string.push_str(string_part);
-            start += 1 + size as usize;
-            let is_pointer = (slice[start] & 0b1100_0000) == 0b1100_0000;
-            println!("Slice start binary {:08b}",slice[start]);
+        let mut is_pointer;
+        let mut size;
+        while {
+            is_pointer = (slice[start] & 0b1100_0000) == 0b1100_0000;
             if is_pointer {
                 let mut n: [u8; 2] = slice[start..start + 2].try_into().unwrap();
 
                 n[0] &= 0b0011_1111;
                 let pointer = u16::from_be_bytes(n);
-                println!("pointer is {pointer}");
                 start = pointer as usize;
             }
             size = u8::from_be_bytes([slice[start]]);
+            size != 0
+        } {
+            if !string.is_empty() {
+                string.push('.');
+            }
+
+            let string_part =
+                from_utf8(&slice[start + 1..start + 1 + size as usize]).map_err(|_| ())?;
+            string.push_str(string_part);
+            start += 1 + size as usize;
         }
+
         let r#type = u16::from_be_bytes(slice[start + 1..start + 3].try_into().unwrap());
         let class = u16::from_be_bytes(slice[start + 3..start + 5].try_into().unwrap());
         let end = if is_pointer {
             real_start + 2
-        }
-        else {
-            start +5
+        } else {
+            start + 5
         };
-        Ok((Self {
-            name: string,
-            r#type,
-            class,
-        }, end))
+        Ok((
+            Self {
+                name: string,
+                r#type,
+                class,
+            },
+            end,
+        ))
     }
 }
 
@@ -122,8 +112,7 @@ pub struct DNSMessageAnswer {
 
 impl DNSMessageAnswer {
     fn parse_from_slice(slice: &[u8], real_start: usize) -> Result<(Self, usize), ()> {
-        let (question,  end) = DNSMessageQuestion::parse_from_slice(slice, real_start)?;
-        println!("Answer end {end}");
+        let (question, end) = DNSMessageQuestion::parse_from_slice(slice, real_start)?;
         let ttl = u32::from_be_bytes((&slice[end..end + 4]).try_into().unwrap());
         let length = u16::from_be_bytes((&slice[end + 4..end + 6]).try_into().unwrap());
         let length_usize = length as usize;
@@ -135,7 +124,9 @@ impl DNSMessageAnswer {
                 ttl,
                 length,
                 data,
-            }, end + 6 + length_usize))
+            },
+            end + 6 + length_usize,
+        ))
     }
 }
 
@@ -156,13 +147,14 @@ impl DNSMessage {
         let mut answers = vec![];
         let mut next_question_start = 12;
         for _ in 0..header.qd_count {
-            let (question, end) = DNSMessageQuestion::parse_from_slice(slice,next_question_start).unwrap();
-            println!("end {end}");
+            let (question, end) =
+                DNSMessageQuestion::parse_from_slice(slice, next_question_start).unwrap();
             next_question_start = end;
             questions.push(question);
         }
         for _ in 0..header.an_count {
-            let (answer, end) = DNSMessageAnswer::parse_from_slice(slice,next_question_start).unwrap();
+            let (answer, end) =
+                DNSMessageAnswer::parse_from_slice(slice, next_question_start).unwrap();
             next_question_start = end;
             answers.push(answer);
         }
@@ -213,13 +205,11 @@ impl DNSMessage {
         res
     }
     pub fn new() -> Self {
-        //     let question = DNSMessageQuestion {
-        //         name: String::new(),
-        //         r#type: 1,
-        //         class: 1,
-        //     };
         Self {
-            header: DNSMessageHeader { packet_id: 1234u16, ..Default::default() },
+            header: DNSMessageHeader {
+                packet_id: 1234u16,
+                ..Default::default()
+            },
             questions: vec![],
             answers: vec![],
         }
@@ -242,7 +232,6 @@ impl DNSMessage {
     }
 }
 
-
 fn main() {
     // You can use print statements as follows for debugging, they'll be visible when running tests.
     println!("Logs from your program will appear here!");
@@ -255,13 +244,10 @@ fn main() {
         match udp_socket.recv_from(&mut buf) {
             Ok((size, source)) => {
                 println!("Received {} bytes from {}", size, source);
-                println!("Received {:X?}", &buf[12..size]);
                 let msg = DNSMessage::parse_from_slice(&buf).unwrap();
-                println!("Received Message {msg:?}");
 
                 let mut answers = vec![];
                 if let Some(ip) = args.get(2) {
-                    println!("Relaying to {ip}");
                     let mut new_msg = msg.clone();
                     new_msg.answers = vec![];
                     for a in msg.questions.iter() {
@@ -269,14 +255,11 @@ fn main() {
                         msg_clone.set_questions(vec![a.clone()]);
                         msg_clone.header.packet_id = counter;
                         counter = (counter + 1) % 10;
-                        println!("Sending {msg_clone:?}");
                         let bytes = msg_clone.build();
                         udp_socket2.send_to(&bytes, ip).unwrap();
                         let mut buf2 = [0; 512];
-                        let (size, source) = udp_socket2.recv_from(&mut buf2).unwrap();
-                        println!("Received2 {} bytes from {}", size, source);
+                        udp_socket2.recv_from(&mut buf2).unwrap();
                         let mut msg2 = DNSMessage::parse_from_slice(&buf2).unwrap();
-                        println!("Got answers {:?}", msg2.answers);
                         answers.append(&mut msg2.answers)
                     }
                 } else {
@@ -295,11 +278,7 @@ fn main() {
                 resp.header.set_opcode(opcode);
                 resp.header.packet_id = msg.header.packet_id;
                 resp.set_header_qr(true);
-                let rcode = if opcode == 0 {
-                    0
-                } else {
-                    4
-                };
+                let rcode = if opcode == 0 { 0 } else { 4 };
                 resp.header.set_rcode(rcode);
                 resp.header.set_rd(msg.header.get_rd());
                 resp.set_answers(answers);
